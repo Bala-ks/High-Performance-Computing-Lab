@@ -1,0 +1,1837 @@
+[23bcs102@mepcolinux ex1]$cat ex1.prn
+Script started on Fri Jan  9 00:58:47 2026
+[23bcs112@mepcolinux ex1]$cat serial.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+int main() {
+    int m, n, p, i, j, k;
+
+    printf("Enter rows (m): "); scanf("%d", &m);
+    printf("Enter cols/rows (n): "); scanf("%d", &n);
+    printf("Enter cols (p): "); scanf("%d", &p);
+
+    // Dynamic memory allocation using malloc
+    int *a = (int *)malloc(m * n * sizeof(int));
+    int *b = (int *)malloc(n * p * sizeof(int));
+    int *rs = (int *)malloc(m * p * sizeof(int));
+
+    srand(time(0));
+    for(i=0; i<m*n; i++) a[i] = 10 + rand() % 90;
+    for(i=0; i<n*p; i++) b[i] = 10 + rand() % 90;
+
+    struct timespec t1, t2;
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+
+    // Serial Matrix Multiplication
+    for(i=0; i<m; i++) {
+        for(j=0; j<p; j++) {
+            rs[i*p+j] = 0;
+            for(k=0; k<n; k++) {
+                rs[i*p+j] += a[i*n+k] * b[k*p+j];
+            }
+        }
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &t2);
+    double t_ser = (t2.tv_sec - t1.tv_sec) + (t2.tv_nsec - t1.tv_nsec) / 1e9;
+
+    printf("\n------------------------------------------------");
+    printf("\nInput Size: %dx%d multiplied by %dx%d", m, n, n, p);
+    printf("\n------------------------------------------------");
+    printf("\nSerial Execution Time   : %lf seconds", t_ser);
+    printf("\n------------------------------------------------\n");
+
+    free(a); free(b); free(rs);
+    return 0;
+}
+
+[23bcs112@mepcolinux ex1]$cat parallel.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <sys/wait.h>
+#include <time.h>
+
+int main() {
+    int m, n, p, i, j, k;
+
+    printf("Enter rows (m): "); scanf("%d", &m);
+    printf("Enter cols/rows (n): "); scanf("%d", &n);
+    printf("Enter cols (p): "); scanf("%d", &p);
+
+    // Shared memory allocation
+    int sz = (m*n + n*p + m*p) * sizeof(int);
+    int sid = shmget(IPC_PRIVATE, sz, IPC_CREAT | 0666);
+    int *mem = shmat(sid, 0, 0);
+
+    int tid = shmget(IPC_PRIVATE, m * sizeof(double), IPC_CREAT | 0666);
+    double *tmem = shmat(tid, 0, 0);
+
+    int *a = mem;
+    int *b = mem + m*n;
+    int *rp = mem + m*n + n*p;
+
+    srand(time(0));
+    for(i=0; i<m*n; i++) a[i] = 10 + rand() % 90;
+    for(i=0; i<n*p; i++) b[i] = 10 + rand() % 90;
+
+    // Parallel Matrix Multiplication using fork
+    for(i=0; i<m; i++) {
+        if(fork() == 0) {
+            struct timespec st, en;
+            clock_gettime(CLOCK_MONOTONIC, &st);
+
+            for(j=0; j<p; j++) {
+                rp[i*p+j] = 0;
+                for(k=0; k<n; k++) {
+                    rp[i*p+j] += a[i*n+k] * b[k*p+j];
+                }
+            }
+
+            clock_gettime(CLOCK_MONOTONIC, &en);
+            tmem[i] = (en.tv_sec - st.tv_sec) + (en.tv_nsec - st.tv_nsec) / 1e9;
+            exit(0);
+        }
+    }
+
+    for(i=0; i<m; i++) wait(NULL);
+
+    double t_par = -1;
+    for(i=0; i<m; i++) {
+        if(t_par < tmem[i]) t_par = tmem[i];
+    }
+
+    printf("\n------------------------------------------------");
+    printf("\nInput Size: %dx%d multiplied by %dx%d", m, n, n, p);
+    printf("\n------------------------------------------------");
+    printf("\nParallel Execution Time : %lf seconds", t_par);
+    printf("\n------------------------------------------------\n");
+
+    shmdt(mem); shmdt(tmem);
+    shmctl(sid, IPC_RMID, NULL); shmctl(tid, IPC_RMID, NULL);
+
+    return 0;
+}
+
+[23bcs112@mepcolinux ex1]$./s
+Enter rows (m): 10
+Enter cols/rows (n): 10
+Enter cols (p): 10
+
+------------------------------------------------
+Input Size: 10x10 multiplied by 10x10
+------------------------------------------------
+Serial Execution Time   : 0.000016 seconds
+------------------------------------------------
+[23bcs112@mepcolinux ex1]$./p
+Enter rows (m): 10
+Enter cols/rows (n): 10
+Enter cols (p): 10
+
+------------------------------------------------
+Input Size: 10x10 multiplied by 10x10
+------------------------------------------------
+Parallel Execution Time : 0.000008 seconds
+------------------------------------------------
+[23bcs112@mepcolinux ex1]$./s
+Enter rows (m): 1000
+Enter cols/rows (n): 1000
+Enter cols (p): 1000
+
+------------------------------------------------
+Input Size: 1000x1000 multiplied by 1000x1000
+------------------------------------------------
+Serial Execution Time   : 18.093675 seconds
+------------------------------------------------
+[23bcs112@mepcolinux ex1]$./p
+Enter rows (m): 1000
+Enter cols/rows (n): 1000
+Enter cols (p): 1000
+
+------------------------------------------------
+Input Size: 1000x1000 multiplied by 1000x1000
+------------------------------------------------
+Parallel Execution Time : 0.101129 seconds
+------------------------------------------------
+[23bcs112@mepcolinux ex1]$./s
+Enter rows (m): 2
+Enter cols/rows (n): 3
+Enter cols (p): 2
+
+------------------------------------------------
+Input Size: 2x3 multiplied by 3x2
+------------------------------------------------
+Serial Execution Time   : 0.000001 seconds
+------------------------------------------------
+[23bcs112@mepcolinux ex1]$./p
+Enter rows (m): 2
+Enter cols/rows (n): 3
+Enter cols (p): 2
+
+------------------------------------------------
+Input Size: 2x3 multiplied by 3x2
+------------------------------------------------
+Parallel Execution Time : 0.000005 seconds
+------------------------------------------------
+[23bcs112@mepcolinux ex1]$exit
+exit
+
+Script done on Fri Jan  9 01:00:28 2026
+[23bcs102@mepcolinux ex1]$
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Exercise - 2
+
+[23bcs102@mepcolinux ex2]$cat ex2.prn
+Script started on Tuesday 20 January 2026 12:11:50 PM IST
+[23bcs102@mepcolinux ex2]$cat tc
+3bcs102@mepcolinux ex2]$cat ser.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+void mul(int m, int n, int p, int *a, int *b, int *result){
+        int i,j,k;
+    for(i=0; i<m; i++) {
+        for(j=0; j<p; j++) {
+            result[i*p+j] = 0;
+            for(k=0; k<n; k++) {
+                result[i*p+j] += a[i*n+k] * b[k*p+j];
+            }
+        }
+    }
+    printf("\nMatrix multiplicatin done");
+}
+void add(int m, int p, int *a, int *b, int *result){
+        int i,j;
+    for(i=0; i<m; i++) {
+        for(j=0; j<p; j++) {
+            result[i*p+j] = a[i*p+j] + b[i*p+j];
+        }
+    }
+    printf("\nMatrix addition done");
+}
+void trans(int m,int p,int *a,int *result){
+        int i,j;
+        for(i=0;i<m;i++){
+                for(j=0;j<p;j++){
+                        result[i*p+j]=a[j*p+i];
+                }
+        }
+        printf("\nMatrix transpose done");
+}
+void sub(int m, int p, int *a, int *b, int *result){
+        int i,j;
+    for(i=0; i<m; i++) {
+        for(j=0; j<p; j++) {
+            result[i*p+j] = a[i*p+j] - b[i*p+j];
+        }
+    }
+    printf("\nMatrix subraction done");
+}
+double calc_determinant(int m, int *a) {
+    if (m == 1) {
+        return a[0];
+    }
+    if (m == 2) {
+        return a[0] * a[3] - a[1] * a[2];
+    }
+    int j,sub_i,sub_j;
+    double det = 0.0;
+    for (j = 0; j < m; j++) {
+        int *submatrix = malloc((m-1)*(m-1)*sizeof(int));
+        for (sub_i = 1; sub_i < m; sub_i++) {
+            int sub_col = 0;
+            for (sub_j = 0; sub_j < m; sub_j++) {
+                if (sub_j != j) {
+                    submatrix[(sub_i-1)*(m-1)+sub_col] = a[sub_i*m+sub_j];
+                    sub_col++;
+                }
+            }
+        }
+        double sub_det = calc_determinant(m-1, submatrix);
+        det += (j % 2 == 0 ? 1 : -1) * a[j] * sub_det;
+        free(submatrix);
+    }
+    return det;
+}
+double determinant(int m, int *a) {
+    return calc_determinant(m, a);
+}
+
+int main() {
+    int m, n, p, i;
+    printf("Enter rows (m): ");
+    scanf("%d", &m);
+    printf("Enter cols/rows (n): ");
+    scanf("%d", &n);
+    printf("Enter cols (p): ");
+    scanf("%d", &p);
+    int *a = malloc(m * n * sizeof(int));
+    int *b = malloc(n * p * sizeof(int));
+    int *mul_result = malloc(m * p * sizeof(int));
+    int *add_result = malloc(m * p * sizeof(int));
+    int *sub_result = malloc(m * p * sizeof(int));
+    int *trans_result = malloc(m * p * sizeof(int));
+    srand(time(0));
+    for(i=0; i<m*n; i++) {
+        a[i] = 10 + rand() % 90;
+    }
+    for(i=0; i<n*p; i++) {
+        b[i] = 10 + rand() % 90;
+    }
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    mul(m, n, p, a, b, mul_result);
+    add(m, p, a, b, add_result);
+    sub(m, p, a, b, sub_result);
+    trans(m,p,a,trans_result);
+    //double det_result = determinant(m, a);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    double serial_time = (end.tv_sec - start.tv_sec) +
+                        (end.tv_nsec - start.tv_nsec) / 1e9;
+
+    printf("\nSerial Execution Time : %.9lf seconds", serial_time);
+    printf("\n================================================\n");
+    free(a);
+    free(b);
+    free(mul_result);
+    free(add_result);
+    free(sub_result);
+    return 0;
+}
+
+
+
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <sys/wait.h>
+#include <time.h>
+void mul(int m,int p,int *a,int *b,int *rp, double *tmem, int idx) {
+    struct timespec st, en;
+    clock_gettime(CLOCK_MONOTONIC, &st);
+    int i,k,j;
+    for(j=0; j<p; j++) {
+        rp[idx*p+j] = 0;
+        for(k=0; k<m; k++) {
+            rp[idx*p+j] += a[idx*m+k] * b[k*p+j];
+        }
+    }
+    clock_gettime(CLOCK_MONOTONIC, &en);
+    tmem[idx] = (en.tv_sec - st.tv_sec) + (en.tv_nsec - st.tv_nsec) / 1e9;
+    printf("\nMatrix multiplication done");
+}
+void add(int m,int p,int *a,int *b,int *rp,double *tmem,int idx)
+{
+    struct timespec st, en;
+    clock_gettime(CLOCK_MONOTONIC, &st);
+    int i,k,j;
+    for(i=0; i<m; i++) {
+        for(j=0; j<p; j++) {
+            rp[i*p+j] = a[i*p+j] + b[i*p+j];
+        }
+    }
+    clock_gettime(CLOCK_MONOTONIC, &en);
+    tmem[idx] = (en.tv_sec - st.tv_sec) + (en.tv_nsec - st.tv_nsec) / 1e9;
+    printf("\nMatrix addition done");
+}
+void sub(int m,int p,int *a,int *b,int *rp,double *tmem,int idx)
+{
+    struct timespec st, en;
+    clock_gettime(CLOCK_MONOTONIC, &st);
+    int i,k,j;
+    for(i=0; i<m; i++) {
+        for(j=0; j<p; j++) {
+            rp[i*p+j] = a[i*p+j] - b[i*p+j];
+        }
+    }
+    clock_gettime(CLOCK_MONOTONIC, &en);
+    tmem[idx] = (en.tv_sec - st.tv_sec) + (en.tv_nsec - st.tv_nsec) / 1e9;
+    printf("\nMatrix subraction done");
+}
+void trans(int m,int p,int *a,int *result,double *tmem,int idx){
+        struct timespec st, en;
+        clock_gettime(CLOCK_MONOTONIC, &st);
+        int i,j;
+        for(i=0;i<m;i++){
+                for(j=0;j<p;j++){
+                        result[i*p+j]=a[j*p+i];
+                }
+        }
+        clock_gettime(CLOCK_MONOTONIC, &en);
+        tmem[idx] = (en.tv_sec - st.tv_sec) + (en.tv_nsec - st.tv_nsec) / 1e9;
+        printf("\nMatrix transpose done");
+}
+
+double calc_determinant(int m, int *a) {
+    if (m == 1) {
+        return a[0];
+    }
+    if (m == 2) {
+        return a[0] * a[3] - a[1] * a[2];
+    }
+    double det = 0.0;
+    int j,sub_i,sub_j;
+    for (j = 0; j < m; j++) {
+        int *submatrix = malloc((m-1)*(m-1)*sizeof(int));
+        for (sub_i = 1; sub_i < m; sub_i++) {
+            int sub_col = 0;
+            for (sub_j = 0; sub_j < m; sub_j++) {
+                if (sub_j != j) {
+                    submatrix[(sub_i-1)*(m-1)+sub_col] = a[sub_i*m+sub_j];
+                    sub_col++;
+                }
+            }
+        }
+        double sub_det = calc_determinant(m-1, submatrix);
+        det += (j % 2 == 0 ? 1 : -1) * a[j] * sub_det;
+        free(submatrix);
+    }
+
+    return det;
+}
+void determinant(int m, int *a, double *det_result, double *tmem, int idx)
+{
+    struct timespec st, en;
+    clock_gettime(CLOCK_MONOTONIC, &st);
+    det_result[0] = calc_determinant(m, a);
+    clock_gettime(CLOCK_MONOTONIC, &en);
+    tmem[idx] = (en.tv_sec - st.tv_sec) + (en.tv_nsec - st.tv_nsec) / 1e9;
+}
+
+int main() {
+    int m, n, p, i, j, k;
+    printf("Enter rows (m): "); scanf("%d", &m);
+    printf("Enter cols/rows (n): "); scanf("%d", &n);
+    printf("Enter cols (p): "); scanf("%d", &p);
+    int sz = (m*n + n*p + m*p) * sizeof(int);
+    int sid = shmget(IPC_PRIVATE, sz, IPC_CREAT | 0666);
+    int *mem = shmat(sid, 0, 0);
+    int tid = shmget(IPC_PRIVATE, m * sizeof(double), IPC_CREAT | 0666);
+    double *tmem = shmat(tid, 0, 0);
+    int did = shmget(IPC_PRIVATE, sizeof(double), IPC_CREAT | 0666);
+    double *det_mem = shmat(did, 0, 0);
+
+    int *a = mem;
+    int *b = mem + m*n;
+    int *rp = mem + m*n + n*p;
+
+    srand(time(0));
+    for(i=0; i<m*n; i++) a[i] = 10 + rand() % 90;
+    for(i=0; i<n*p; i++) b[i] = 10 + rand() % 90;
+
+
+    for(i=0; i<4; i++) {
+        if(fork() == 0) {
+            if(i==0)
+            {
+                mul(m, p, a, b, rp, tmem, 0);
+            }
+            else if(i==1)
+            {
+                add(m, p, a, b, rp, tmem, 1);
+            }
+            else if(i==2)
+            {
+                sub(m, p, a, b, rp, tmem, 2);
+            }
+            else
+            {
+                trans(m,p,a,rp,tmem, 3);
+            }
+            exit(0);
+        }
+    }
+
+    for(i=0; i<4; i++) wait(NULL);
+
+    double t_par = -1;
+    for(i=0; i<4; i++) {
+        if(t_par < tmem[i]) t_par = tmem[i];
+    }
+
+    printf("\nParallel Execution Time : %lf seconds", t_par);
+    printf("\n================================================\n");
+    shmdt(mem);
+    shmdt(tmem);
+    shmdt(det_mem);
+    shmctl(sid, IPC_RMID, NULL);
+    shmctl(tid, IPC_RMID, NULL);
+    shmctl(did, IPC_RMID, NULL);
+    return 0;
+}
+
+
+
+
+
+[23bcs102@mepcolinux ex2]$./ser
+Enter rows (m): 5
+Enter cols/rows (n): 5
+Enter cols (p): 5
+
+Matrix multiplicatin done
+Matrix addition done
+Matrix subraction done
+Matrix transpose done
+Serial Execution Time : 0.000034263 seconds
+================================================
+[23bcs102@mepcolinux ex2]$./ser
+Enter rows (m): 10
+Enter cols/rows (n): 10
+Enter cols (p): 10
+
+Matrix multiplicatin done
+Matrix addition done
+Matrix subraction done
+Matrix transpose done
+Serial Execution Time : 0.000044695 seconds
+================================================
+[23bcs102@mepcolinux ex2]$./ser
+Enter rows (m): 50
+Enter cols/rows (n): 50
+Enter cols (p): 50
+
+Matrix multiplicatin done
+Matrix addition done
+Matrix subraction done
+Matrix transpose done
+Serial Execution Time : 0.001203104 seconds
+================================================
+
+
+
+[23bcs102@mepcolinux ex2]$./par
+Enter rows (m): 5
+Enter cols/rows (n): 5
+Enter cols (p): 5
+
+Matrix subraction done
+Matrix transpose done
+Matrix multiplication done
+Matrix addition done
+Parallel Execution Time : 0.000005 seconds
+================================================
+[23bcs102@mepcolinux ex2]$./par
+Enter rows (m): 10
+Enter cols/rows (n): 10
+Enter cols (p): 10
+
+Matrix multiplication done
+Matrix addition done
+Matrix subraction done
+Matrix transpose done
+Parallel Execution Time : 0.000005 seconds
+================================================
+[23bcs102@mepcolinux ex2]$./par
+Enter rows (m): 50
+Enter cols/rows (n): 50
+Enter cols (p): 50
+
+Matrix addition done
+Matrix transpose done
+Matrix subraction done
+Matrix multiplication done
+Parallel Execution Time : 0.000061 seconds
+================================================
+
+[23bcs102@mepcolinux ex2]$exit
+exit
+
+Script done on Tuesday 20 January 2026 12:11:55 PM IST
+[23bcs102@mepcolinux ex2]$
+
+
+
+Exercise - 3 
+
+[23bcs102@mepcolinux ex3]$cat ex3.prn
+Script started on Tuesday 20 January 2026 12:14:40 PM IST
+[23bcs102@mepcolinux ex3]$cat tc
+ada@ada:~$ cat pr1.c
+#include <mpi.h>
+#include <stdio.h>
+
+int main(int argc, char *argv[]) {
+    MPI_Init(&argc, &argv);
+
+    int rank, size;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    printf("Hello from rank %d out of %d processes\n", rank, size);
+    fflush(stdout);
+
+    MPI_Finalize();
+    return 0;
+}
+ada@ada:~$ ls
+a.out  Bhuvan  Desktop  Documents  Downloads  greeting.c  keys  keys.pub  Music  Pictures  pr1.c  pr2.c  Public  tc  temp  Templates  Videos
+ada@ada:~$ cat tc
+ada@ada:~$ cat pr1.c
+#include <mpi.h>
+#include <stdio.h>
+
+int main(int argc, char *argv[]) {
+    MPI_Init(&argc, &argv);
+
+    int rank, size;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    printf("Hello from rank %d out of %d processes\n", rank, size);
+    fflush(stdout);
+
+    MPI_Finalize();
+    return 0;
+}
+ada@ada:~$ mpicc pr1.c
+ada@ada:~$ mpirun -np 4 ./a.out
+Hello from rank 0 out of 4 processes
+Hello from rank 2 out of 4 processes
+Hello from rank 3 out of 4 processes
+Hello from rank 1 out of 4 processes
+ada@ada:~$ mpirun -np 5 ./a.out
+--------------------------------------------------------------------------
+There are not enough slots available in the system to satisfy the 5
+slots that were requested by the application:
+
+  ./a.out
+
+Either request fewer slots for your application, or make more slots
+available for use.
+
+A "slot" is the Open MPI term for an allocatable unit where we can
+launch a process.  The number of slots available are defined by the
+environment in which Open MPI processes are run:
+
+  1. Hostfile, via "slots=N" clauses (N defaults to number of
+     processor cores if not provided)
+  2. The --host command line parameter, via a ":N" suffix on the
+     hostname (N defaults to 1 if not provided)
+  3. Resource manager (e.g., SLURM, PBS/Torque, LSF, etc.)
+  4. If none of a hostfile, the --host command line parameter, or an
+     RM is present, Open MPI defaults to the number of processor cores
+
+In all the above cases, if you want Open MPI to default to the number
+of hardware threads instead of the number of processor cores, use the
+--use-hwthread-cpus option.
+
+Alternatively, you can use the --oversubscribe option to ignore the
+number of available slots when deciding the number of processes to
+launch.
+--------------------------------------------------------------------------
+ada@ada:~$ cat pr2.c
+#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+#include <mpi.h>
+
+int isPalindrome(char str[]){
+    int i = 0, j = strlen(str) - 1;
+    while (i < j){
+        if (str[i] != str[j])
+            return 0;
+        i++;
+        j--;
+    }
+    return 1;
+}
+
+void toUpperCase(char str[]){
+    for (int i = 0; str[i]; i++)
+        str[i] = toupper(str[i]);
+}
+
+int main(int argc, char *argv[]){
+    int rank, size;
+    char message[50];
+
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    char inp[3][50] = {"bala", "aabbccbbaa", "aabbaa"};
+    if (rank == 0){
+        MPI_Status status;
+        for (int i = 1; i < size; i++){
+            MPI_Recv(message, 50, MPI_CHAR, MPI_ANY_SOURCE,
+                     MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+            int sender = status.MPI_SOURCE;
+            int type = status.MPI_TAG;
+
+            if (type == 1){
+                toUpperCase(message);
+                printf("\n[Type1] from proc %d : uppercase = %s",
+                       sender, message);
+            }else if (type == 2){
+                if (isPalindrome(message))
+                    printf("\n[Type2] from proc %d : %s is Palindrome",
+                           sender, message);
+                else
+                    printf("\n[Type2] from proc %d : %s is NOT Palindrome",
+                           sender, message);
+            }
+        }
+    }
+    else{
+        if (rank % 2 == 1){
+            strcpy(message, inp[rank-1]);
+            MPI_Send(message, 50, MPI_CHAR, 0, 1, MPI_COMM_WORLD);
+        }else{
+            strcpy(message, inp[rank-1]);
+            MPI_Send(message, 50, MPI_CHAR, 0, 2, MPI_COMM_WORLD);
+        }
+    }
+
+    MPI_Finalize();
+    return 0;
+}
+
+ada@ada:~$ mpicc pr2.c
+ada@ada:~$ mpirun -np 4 ./a.out
+
+[Type1] from proc 1 : uppercase = BALA
+[Type1] from proc 3 : uppercase = AABBAA
+[Type2] from proc 2 : aabbccbbaa is Palindromeada@ada:~$
+ada@ada:~$
+
+
+[23bcs102@mepcolinux ex3]$exit
+exit
+
+Script done on Tuesday 20 January 2026 12:14:45 PM IST
+[23bcs102@mepcolinux ex3]$
+
+
+
+Exercise - 4
+
+[23bcs102@mepcolinux ex4]$cat ex4.prn
+Script started on Tuesday 10 February 2026 11:18:43 AM IST
+[?1034h[23bcs102@mepcolinux ex4]$cat pr1.c
+#include <mpi.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct {
+    char name[50];
+    int roll;
+    float total_mark;
+    char grade;
+} Student;
+
+char find_grade(float marks) {
+    if (marks >= 90) return 'A';
+    else if (marks >= 75) return 'B';
+    else if (marks >= 50) return 'C';
+    else if (marks >= 35) return 'D'; // Adjusted logic slightly for clarity
+    else return 'F';
+}
+
+int main(int argc, char *argv[]) {
+    int rank, size, n, i;
+    MPI_Datatype MPI_STUDENT;
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    int blocklengths[4] = {50, 1, 1, 1};
+    MPI_Aint displacements[4];
+    MPI_Aint addresses[4];
+    Student temp;
+
+    MPI_Get_address(&temp.name, &addresses[0]);
+    MPI_Get_address(&temp.roll, &addresses[1]);
+    MPI_Get_address(&temp.total_mark, &addresses[2]);
+    MPI_Get_address(&temp.grade, &addresses[3]);
+
+    for (i = 0; i < 4; i++) {
+        displacements[i] = addresses[i] - addresses[0];
+    }
+
+    MPI_Datatype types[4] = {MPI_CHAR, MPI_INT, MPI_FLOAT, MPI_CHAR};
+    MPI_Type_create_struct(4, blocklengths, displacements, types, &MPI_STUDENT);
+    MPI_Type_commit(&MPI_STUDENT);
+
+    Student *students = NULL;
+    Student *local_students;
+    int local_n;
+
+    if (rank == 0) {
+        FILE *fp = fopen("in.txt", "r");
+        if (fp) {
+            students = malloc(100 * sizeof(Student));
+            n = 0;
+            while (fscanf(fp, "%s %d %f", students[n].name, &students[n].roll, &students[n].total_mark) == 3) {
+                n++;
+            }
+            if(n%size!=0)
+            {
+                    printf("it is not divisible");
+                    MPI_Abort(MPI_COMM_WORLD,1);
+            }
+            fclose(fp);
+        }
+    }
+
+    MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    local_n = n / size;
+    local_students = malloc(local_n * sizeof(Student));
+
+    MPI_Scatter(students, local_n, MPI_STUDENT, local_students, local_n, MPI_STUDENT, 0, MPI_COMM_WORLD);
+
+    for (i = 0; i < local_n; i++) {
+        local_students[i].grade = find_grade(local_students[i].total_mark);
+    }
+
+    MPI_Gather(local_students, local_n, MPI_STUDENT, students, local_n, MPI_STUDENT, 0, MPI_COMM_WORLD);
+
+    if (rank == 0) {
+        FILE *out = fopen("grade.txt", "w");
+        if (out) {
+            for (i = 0; i < n; i++) {
+                fprintf(out, "%s %d %.2f %c\n", students[i].name, students[i].roll, students[i].total_mark, students[i].grade);
+            }
+            fclose(out);
+        }
+        free(students);
+    }
+
+    free(local_students);
+    MPI_Type_free(&MPI_STUDENT);
+    MPI_Finalize();
+    return 0;
+}
+
+[23bcs102@mepcolinux ex4]$cat in.txt
+Bala 101 92.5
+balaji 102 78.0
+jon 103 62.5
+Haris 104 45.0
+Haram 105 30.0
+ABC 105 23.0
+CDE 106 2.0
+ZXC 107 1.0
+
+[23bcs102@mepcolinux ex4]$cat tc
+student@gbl:~$ cat in.txt
+Bala 101 92.5
+balaji 102 78.0
+jon 103 62.5
+Haris 104 45.0
+Haram 105 30.0
+ABC 105 23.0
+CDE 106 2.0
+ZXC 107 1.0
+
+student@gbl:~$ cat ou
+cat: ou: No such file or directory
+student@gbl:~$ cat out.txt
+cat: out.txt: No such file or directory
+student@gbl:~$ ls
+ a.out                             eclipse-workspace   NetBeansProjects
+ Desktop                           form.html           Pictures
+ Documents                         grade.txt           Public
+ Downloads                         in.txt              stu.c
+ eclipse                           lib.js              Templates
+ eclipse-installer                 model1.java        'Unsaved Document 1'
+ eclipse-inst-jre-linux64.tar.gz   Music               Videos
+student@gbl:~$ cat grade.txt
+Bala 101 92.50 A
+balaji 102 78.00 B
+jon 103 62.50 C
+Haris 104 45.00 D
+Haram 105 30.00 F
+ABC 105 23.00 F
+CDE 106 2.00 F
+ZXC 107 1.00 F
+student@gbl:~$ vi stu.c
+student@gbl:~$ vi in.txt
+student@gbl:~$ mpiexec -n 4 ./a.out
+--------------------------------------------------------------------------
+MPI_ABORT was invoked on rank 0 in communicator MPI_COMM_WORLD
+with errorcode 1.
+
+NOTE: invoking MPI_ABORT causes Open MPI to kill all MPI processes.
+You may or may not see output from other processes, depending on
+exactly when Open MPI kills them.
+--------------------------------------------------------------------------
+student@gbl:~$ vi stu.c
+
+[23bcs102@mepcolinux ex4]$exit
+exit
+
+Script done on Tuesday 10 February 2026 11:18:58 AM IST
+[23bcs102@mepcolinux ex4]$
+
+
+
+
+
+
+[23bcs102@mepcolinux ex5]$cat ex5.prn
+Script started on Tuesday 03 March 2026 11:13:25 AM IST
+[23bcs102@mepcolinux ex5]$cat testcase
+i#include<stdio.h>
+#include<pthread.h>
+int n=0;
+void *greetings(void *args){
+        printf("Hello from thread %d \n",n++);
+        pthread_exit(NULL);
+}
+
+int main(){
+   printf("Enter no of process : ");
+   int size;
+   scanf("%d",&size);
+   printf("Main Thread starting\n");
+   pthread_t p[size];
+   for(int i=0;i<size;i++)
+      pthread_create(&p[i],NULL,greetings,NULL);
+   for(int i=0;i<size;i++)
+      pthread_join(p[i],NULL);
+   printf("Main thread exiting\n");
+   return 0;
+}
+student@gbl:~$ g++ pr1.c
+student@gbl:~$ ./a.out
+Enter no of process : 8
+Main Thread starting
+Hello from thread 0
+Hello from thread 1
+Hello from thread 2
+Hello from thread 3
+Hello from thread 4
+Hello from thread 5
+Hello from thread 6
+Hello from thread 7
+Main thread exiting
+student@gbl:~$ ./a.out
+Enter no of process : 3
+Main Thread starting
+Hello from thread 0
+Hello from thread 1
+Hello from thread 2
+Main thread exiting
+student@gbl:~$ cat pr2.c
+#include <stdio.h>
+#include <pthread.h>
+int sum = 0;
+int n;
+
+void* find_sum(void* arg) {
+    int i;
+    for (i = 1; i <= n; i++) sum += i;
+    pthread_exit(NULL);
+}
+
+int main() {
+    pthread_t t;
+
+    printf("\tEnter a number: ");
+    scanf("%d", &n);
+
+    pthread_create(&t, NULL, find_sum, NULL);
+    pthread_join(t, NULL);
+
+    printf("\tSum of first %d numbers = %d\n", n, sum);
+
+    return 0;
+}
+student@gbl:~$ g++ pr2.c
+student@gbl:~$ ./a.out
+        Enter a number: 5
+        Sum of first 5 numbers = 15
+student@gbl:~$ ./a.out
+        Enter a number: 45
+        Sum of first 45 numbers = 1035
+student@gbl:~$ ./a.out
+        Enter a number: 33
+        Sum of first 33 numbers = 561
+student@gbl:~$ cat pr3.c
+#include <stdio.h>
+#include <pthread.h>
+
+#define MAX 10
+
+int A[MAX][MAX], B[MAX][MAX];
+int add[MAX][MAX], mul[MAX][MAX];
+int n;
+
+void* matrix_addition(void* arg) {
+    int i, j;
+    for (i = 0; i < n; i++) {
+        for (j = 0; j < n; j++) {
+            add[i][j] = A[i][j] + B[i][j];
+        }
+    }
+    pthread_exit(NULL);
+}
+
+void* matrix_multiplication(void* arg) {
+    int i, j, k;
+    for (i = 0; i < n; i++) {
+        for (j = 0; j < n; j++) {
+            mul[i][j] = 0;
+            for (k = 0; k < n; k++) {
+                mul[i][j] += A[i][k] * B[k][j];
+            }
+        }
+    }
+    pthread_exit(NULL);
+}
+
+int main() {
+    pthread_t t1, t2;
+    int i, j;
+
+    printf("Enter matrix size (N): ");
+    scanf("%d", &n);
+
+    printf("\nEnter Matrix A:\n");
+    for (i = 0; i < n; i++)
+        for (j = 0; j < n; j++)
+            scanf("%d", &A[i][j]);
+
+    printf("\nEnter Matrix B:\n");
+    for (i = 0; i < n; i++)
+        for (j = 0; j < n; j++)
+            scanf("%d", &B[i][j]);
+
+
+    pthread_create(&t1, NULL, matrix_addition, NULL);
+    pthread_create(&t2, NULL, matrix_multiplication, NULL);
+
+
+    pthread_join(t1, NULL);
+    pthread_join(t2, NULL);
+
+    printf("\nMatrix Addition Result:\n");
+    for (i = 0; i < n; i++) {
+        for (j = 0; j < n; j++)
+            printf("%d ", add[i][j]);
+        printf("\n");
+    }
+
+    printf("\nMatrix Multiplication Result:\n");
+    for (i = 0; i < n; i++) {
+        for (j = 0; j < n; j++)
+            printf("%d ", mul[i][j]);
+        printf("\n");
+    }
+
+    return 0;
+}
+
+student@gbl:~$ g++ pr3.c
+student@gbl:~$ ./a.out
+Enter matrix size (N): 5
+
+Enter Matrix A:
+5
+3
+4
+1
+8
+3
+0
+5
+7
+3
+4
+9
+4
+3
+8
+45
+2
+23
+68
+47
+13
+16
+18
+17
+161
+
+Enter Matrix B:
+12
+13
+14
+15
+16
+19
+18
+17
+3
+4
+35
+36
+37
+38
+39
+45
+46
+47
+1
+2
+
+3
+4
+6
+7
+8
+
+Matrix Addition Result:
+17 16 18 16 24
+22 18 22 10 7
+39 45 41 41 47
+90 48 70 69 49
+16 20 24 24 169
+
+Matrix Multiplication Result:
+326 341 364 293 314
+535 553 574 263 281
+518 528 546 298 326
+4584 4765 4993 1952 2137
+2338 2531 2885 2071 2296
+student@gbl:~$     scanf("%d", &n);
+47
+13
+16
+18
+17
+161
+
+Enter Matrix B:
+12
+13
+14
+15
+16
+19
+18
+17
+3
+4
+35
+36
+37
+38
+39
+45
+46
+47
+1
+2
+
+3
+4
+6
+7
+8
+
+Matrix Addition Result:
+17 16 18 16 24
+22 18 22 10 7
+39 45 41 41 47
+90 48 70 69 49
+16 20 24 24 169
+
+Matrix Multiplication Result:
+326 341 364 293 314
+535 553 574 263 281
+518 528 546 298 326
+4584 4765 4993 1952 2137
+2338 2531 2885 2071 2296
+
+[23bcs102@mepcolinux ex5]$cat sum.c
+#include <stdio.h>
+#include <pthread.h>
+
+#define MAX 100
+int arr[MAX];
+int n;
+int sum = 0;
+pthread_mutex_t lock;
+
+typedef struct {
+    int start;
+    int end;
+    int local_sum;
+} Data;
+
+void *sum_part(void *arg) {
+    Data *d = (Data *)arg;
+    d->local_sum = 0;
+    for (int i = d->start; i < d->end; i++) {
+        d->local_sum += arr[i];
+    }
+
+    pthread_mutex_lock(&lock);
+    sum += d->local_sum;
+    pthread_mutex_unlock(&lock);
+    return NULL;
+}
+
+int main() {
+    pthread_t t1, t2;
+    printf("Enter number of elements (even): ");
+    scanf("%d", &n);
+    printf("Enter elements:\n");
+    for (int i = 0; i < n; i++) scanf("%d", &arr[i]);
+    Data d1,d2;
+    pthread_mutex_init(&lock, NULL);
+    if(n%2==0)
+    {
+            Data d1 = {0, n/2, 0};
+            Data d2 = {n/2, n, 0};
+    }
+    else
+    {
+            Data d1={0,n/2,0};
+            Data d2={n/2,n,0};
+    }
+    pthread_create(&t1, NULL, sum_part, &d1);
+    pthread_create(&t2, NULL, sum_part, &d2);
+    pthread_join(t1, NULL);
+    pthread_join(t2, NULL);
+
+    printf("Thread 1 Local Sum: %d\n", d1.local_sum);
+    printf("Thread 2 Local Sum: %d\n", d2.local_sum);
+
+    pthread_mutex_destroy(&lock);
+    printf("Total Sum = %d\n", sum);
+    return 0;
+}
+
+
+Enter number of elements (even): 5
+Enter elements:
+4
+5
+6
+7
+1
+Thread 1 Local Sum: 9
+Thread 2 Local Sum: 14
+Total Sum = 23
+
+
+[23bcs102@mepcolinux ex5]$exit
+exit
+
+Script done on Tuesday 03 March 2026 11:13:28 AM IST
+[23bcs102@mepcolinux ex5]$
+
+
+
+
+
+
+
+
+
+Exercise - 6
+
+
+[23bcs102@mepcolinux ex6]$cat ex6.prn
+Script started on Tuesday 24 March 2026 11:41:51 AM IST
+[23bcs102@mepcolinux ex6]$cat res
+
+[23bcs102@mepcolinux ex6]$cat pr1.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <semaphore.h>
+#include <unistd.h>
+#include <time.h>
+
+#define QUEUE_SIZE 8
+#define NUM_JOBS 10
+
+typedef struct {
+    int a, b;
+    int op;
+} job_t;
+
+job_t queue[QUEUE_SIZE];
+int front = 0, rear = 0;
+
+sem_t sem_empty;
+sem_t sem_full;
+sem_t sem_mutex;
+
+FILE *result_fp;
+
+const char* op_to_str(int op) {
+    if (op == 1) return "add";
+    if (op == 2) return "sub";
+    if (op == 3) return "mul";
+    if (op == 4) return "div";
+    return "?";
+}
+
+void enqueue(job_t j) {
+    queue[rear] = j;
+    rear = (rear + 1) % QUEUE_SIZE;
+}
+
+job_t dequeue() {
+    job_t j = queue[front];
+    front = (front + 1) % QUEUE_SIZE;
+    return j;
+}
+
+void* producer(void* arg) {
+    for (int i = 0; i < NUM_JOBS; ++i) {
+        job_t job;
+        job.a = rand() % 51;
+        job.b = rand() % 51;
+        job.op = (rand() % 4) + 1;
+
+        sem_wait(&sem_empty);
+        sem_wait(&sem_mutex);
+
+        enqueue(job);
+        printf("PRODUCED: %d %s %d\n", job.a, op_to_str(job.op), job.b);
+
+        sem_post(&sem_mutex);
+        sem_post(&sem_full);
+
+        usleep(100000);
+    }
+    for (int k = 0; k < 4; ++k) {
+        sem_wait(&sem_empty);
+        sem_wait(&sem_mutex);
+        enqueue((job_t){0, 0, 0});
+        sem_post(&sem_mutex);
+        sem_post(&sem_full);
+    }
+
+    return NULL;
+}
+
+void* consumer(void* arg) {
+        int id = *(int*)arg;
+        free(arg);
+    while (1) {
+        sem_wait(&sem_full);
+        sem_wait(&sem_mutex);
+        job_t job = dequeue();
+        sem_post(&sem_mutex);
+        sem_post(&sem_empty);
+
+        if (job.op == 0) break;
+
+        int res;
+        switch (job.op) {
+            case 1: res = job.a + job.b; break;
+            case 2: res = job.a - job.b; break;
+            case 3: res = job.a * job.b; break;
+            case 4: res = (job.b == 0 ? 0 : job.a / job.b); break;
+            default: res = 0;
+        }
+        printf("Thread %d computing : %d %s %d \n", id, job.a, op_to_str(job.op), job.b);
+        fprintf(result_fp, "%d %s %d = %d\n", job.a, op_to_str(job.op), job.b, res);
+        fflush(result_fp);
+
+        usleep(150000);
+    }
+    return NULL;
+}
+
+int main() {
+    srand(time(NULL));
+    result_fp = fopen("result.txt", "w");
+    if (!result_fp) {
+        perror("result.txt");
+        exit(1);
+    }
+
+    sem_init(&sem_empty, 0, QUEUE_SIZE);
+    sem_init(&sem_full,  0, 0);
+    sem_init(&sem_mutex, 0, 1);
+
+    pthread_t prod, cons[4];
+    pthread_create(&prod, NULL, producer, NULL);
+    for (int i = 0; i < 4; ++i){
+        int *id = (int*)malloc(sizeof(int));
+        if(id==NULL)
+        {
+                perror("error");
+                exit(0);
+        }
+        *id = i;
+        pthread_create(&cons[i], NULL, consumer,id);
+
+    }
+
+    pthread_join(prod, NULL);
+    for (int i = 0; i < 4; ++i)
+        pthread_join(cons[i], NULL);
+
+    fclose(result_fp);
+    printf("Done. See result.txt\n");
+    return 0;
+}
+[23bcs102@mepcolinux ex6]$g++ temp.c -pthread
+[23bcs102@mepcolinux ex6]$./a.out
+--- System Initialization ---
+Queue Size: 8 | Total Jobs: 10
+------------------------------
+[PRODUCER] Created job: 29 - 26
+[CONSUMER 1] Computing: 29 - 26 = 3
+[PRODUCER] Created job: 11 -  3
+[CONSUMER 0] Computing: 11 -  3 = 8
+[PRODUCER] Created job: 29 * 11
+[CONSUMER 2] Computing: 29 * 11 = 319
+[PRODUCER] Created job: 18 / 43
+[CONSUMER 3] Computing: 18 / 43 = 0
+[PRODUCER] Created job:  1 + 16
+[CONSUMER 1] Computing:  1 + 16 = 17
+[PRODUCER] Created job: 17 /  6
+[CONSUMER 0] Computing: 17 /  6 = 2
+[PRODUCER] Created job:  2 * 44
+[CONSUMER 2] Computing:  2 * 44 = 88
+[PRODUCER] Created job: 27 + 11
+[CONSUMER 3] Computing: 27 + 11 = 38
+[PRODUCER] Created job: 39 * 43
+[CONSUMER 1] Computing: 39 * 43 = 1677
+[PRODUCER] Created job: 15 *  0
+[CONSUMER 0] Computing: 15 *  0 = 0
+------------------------------
+Processing Complete. Results written to 'result.txt'.
+[23bcs102@mepcolinux ex6]$cat result.txt
+29 - 26 = 3
+11 - 3 = 8
+29 * 11 = 319
+18 / 43 = 0
+1 + 16 = 17
+17 / 6 = 2
+2 * 44 = 88
+27 + 11 = 38
+39 * 43 = 1677
+15 * 0 = 0
+[23bcs102@mepcolinux ex6]$
+
+
+[23bcs102@mepcolinux ex6]$exit
+exit
+
+Script done on Tuesday 24 March 2026 11:41:56 AM IST
+[23bcs102@mepcolinux ex6]$
+
+
+
+
+
+Exercise - 7
+
+
+[23bcs102@mepcolinux ex7]$cat ex7.prn
+Script started on Tuesday 31 March 2026 11:02:16 AM IST
+[23bcs102@mepcolinux ex7]$cat test
+[23bcs102@mepcolinux ex7]$cat pr1.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+
+#define BUFFER_SIZE 5
+#define RESULT_SIZE 10
+#define DICTIONARY_SIZE 5
+#define NUM_SPELL_THREADS 3
+char *buffer[BUFFER_SIZE];
+int buffer_count = 0;
+int buffer_in = 0;
+int buffer_out = 0;
+
+pthread_mutex_t buffer_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t buffer_not_empty = PTHREAD_COND_INITIALIZER;
+pthread_cond_t buffer_not_full = PTHREAD_COND_INITIALIZER;
+
+char *result_buffer[RESULT_SIZE];
+int result_count = 0;
+int result_in = 0;
+
+pthread_mutex_t result_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+int done_adding = 0;
+const char *dictionary[DICTIONARY_SIZE] = {"performance", "keyword", "mouse", "orange", "pear"};
+
+int is_in_dictionary(const char *word) {
+        int i;
+    for ( i = 0; i < DICTIONARY_SIZE; i++) {
+        if (strcmp(word, dictionary[i]) == 0) return 1;
+    }
+    return 0;
+}
+void *spell_check_thread(void *arg) {
+    while (1) {
+        pthread_mutex_lock(&buffer_mutex);
+        while (buffer_count == 0 && !done_adding) {
+            pthread_cond_wait(&buffer_not_empty, &buffer_mutex);
+        }
+        if (buffer_count == 0 && done_adding) {
+            pthread_mutex_unlock(&buffer_mutex);
+            break;
+        }
+
+        char *word = buffer[buffer_out];
+        buffer_out = (buffer_out + 1) % BUFFER_SIZE;
+        buffer_count--;
+
+        pthread_cond_signal(&buffer_not_full);
+        pthread_mutex_unlock(&buffer_mutex);
+        int correct = is_in_dictionary(word);
+        pthread_mutex_lock(&result_mutex);
+        if (result_count < RESULT_SIZE) {
+            char *res_str = malloc(100);
+            snprintf(res_str, 100, "%-10s : %s", word, correct ? "correct" : "incorrect");
+            result_buffer[result_in] = res_str;
+            result_in = (result_in + 1) % RESULT_SIZE;
+            result_count++;
+        }
+        pthread_mutex_unlock(&result_mutex);
+    }
+    return NULL;
+}
+
+int main() {
+    pthread_t spell_threads[NUM_SPELL_THREADS];
+    char *words_to_check[] = {"performance", "key", "keyword", "lemon", "orange", "cherry"};
+    int total_words = sizeof(words_to_check) / sizeof(words_to_check[0]);
+        int i;
+    for(i=0;i<DICTIONARY_SIZE;i++)
+    {
+            printf("%s\t",dictionary[i]);
+    }
+    for (i = 0; i < NUM_SPELL_THREADS; i++) {
+        pthread_create(&spell_threads[i], NULL, spell_check_thread, NULL);
+    }
+
+    for ( i = 0; i < total_words; i++) {
+        pthread_mutex_lock(&buffer_mutex);
+        while (buffer_count == BUFFER_SIZE) {
+            pthread_cond_wait(&buffer_not_full, &buffer_mutex);
+        }
+
+        buffer[buffer_in] = words_to_check[i];
+        buffer_in = (buffer_in + 1) % BUFFER_SIZE;
+        buffer_count++;
+
+        pthread_cond_signal(&buffer_not_empty);
+        pthread_mutex_unlock(&buffer_mutex);
+    }
+
+    pthread_mutex_lock(&buffer_mutex);
+    done_adding = 1;
+    pthread_cond_broadcast(&buffer_not_empty);
+    pthread_mutex_unlock(&buffer_mutex);
+    for ( i = 0; i < NUM_SPELL_THREADS; i++) {
+        pthread_join(spell_threads[i], NULL);
+    }
+
+    printf("\nSpell Check Results:\n");
+    for ( i = 0; i < result_count; i++) {
+        printf("%s\n", result_buffer[i]);
+        free(result_buffer[i]); // Clean up allocated memory
+    }
+
+    pthread_mutex_destroy(&buffer_mutex);
+    pthread_cond_destroy(&buffer_not_empty);
+    pthread_cond_destroy(&buffer_not_full);
+    pthread_mutex_destroy(&result_mutex);
+
+    return 0;
+}
+
+[23bcs102@mepcolinux ex7]$gcc pr1.c -pthread
+[23bcs102@mepcolinux ex7]$./a.out
+performance     keyword mouse   orange  pear
+Spell Check Results:
+performance : correct
+keyword    : correct
+lemon      : incorrect
+orange     : correct
+cherry     : incorrect
+key        : incorrect
+
+[23bcs102@mepcolinux ex7]$exit
+exit
+
+Script done on Tuesday 31 March 2026 11:02:21 AM IST
+[23bcs102@mepcolinux ex7]$
+
+
+
+
+Exercise - 8
+
+Script started on Tuesday 31 March 2026 11:03:15 AM IST
+[23bcs102@mepcolinux ex8]$cat test
+[23bcs102@mepcolinux ex8]$cat pr1.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <omp.h>
+
+int main() {
+    int n = 10000000,i;
+    srand(time(NULL));
+
+    int *a = malloc(n * sizeof(int));
+    int *b = malloc(n * sizeof(int));
+    int *c = malloc(n * sizeof(int));
+
+    #pragma omp parallel for
+    for (i = 0; i < n; i++) {
+        a[i] = rand() % 100;
+        b[i] = rand() % 100;
+    }
+
+    #pragma omp parallel for
+    for (i = 0; i < n; i++) {
+        c[i] = a[i] + b[i];
+    }
+    printf("Sample first 5 data : \n");
+    for (i = 0; i < 5; i++) {
+        printf("%d + %d = %d\n", a[i], b[i], c[i]);
+    }
+
+    free(a);
+    free(b);
+    free(c);
+
+    return 0;
+}
+
+[23bcs102@mepcolinux ex8]$cc -fopenmp pr1.c
+[23bcs102@mepcolinux ex8]$./a.out
+Sample first 5 data :
+51 + 15 = 66
+68 + 70 = 138
+97 + 25 = 122
+22 + 21 = 43
+66 + 40 = 106
+[23bcs102@mepcolinux ex8]$cat pr2.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <omp.h>
+
+int main() {
+    int n = 1000,i;
+    long sum = 0;
+    srand(time(NULL));
+
+    int *a = malloc(n * sizeof(int));
+
+    #pragma omp parallel for
+    for (i = 0; i < n; i++) {
+        a[i] = rand() % 100;
+    }
+
+    #pragma omp parallel for reduction(+:sum)
+    for (i = 0; i < n; i++) {
+        sum += a[i];
+    }
+
+    printf("Array Sum: %ld\n", sum);
+
+    free(a);
+    return 0;
+}
+
+[23bcs102@mepcolinux ex8]$cc -fopenmp pr2.c
+[23bcs102@mepcolinux ex8]$./a.out
+Array Sum: 50717
+
+[23bcs102@mepcolinux ex8]$exit
+exit
+
+Script done on Tuesday 31 March 2026 11:03:19 AM IST
+
+
+
+
+
+
+
+
+Exercise - 9
+
+[23bcs102@mepcolinux ex9]$cat ex9.prn
+Script started on Tuesday 31 March 2026 11:53:52 AM IST
+[23bcs102@mepcolinux ex9]$cat test
+[23bcs102@mepcolinux ex9]$cat pr1.c
+#include <stdio.h>
+#include <omp.h>
+
+double f(double x) { return x * x; }
+
+int main() {
+    double a, b;
+    int n;
+
+    printf("Enter lower limit (a): ");
+    scanf("%lf", &a);
+    printf("Enter upper limit (b): ");
+    scanf("%lf", &b);
+    printf("Enter number of sub-intervals (n): ");
+    scanf("%d", &n);
+
+    double h = (b - a) / n;
+    double res_red = (f(a) + f(b)) / 2.0;
+    double res_crit = (f(a) + f(b)) / 2.0;
+
+    #pragma omp parallel for reduction(+:res_red)
+    for (int i = 1; i < n; i++) {
+        res_red += f(a + i * h);
+    }
+    res_red *= h;
+
+    #pragma omp parallel
+    {
+        double local = 0.0;
+        #pragma omp for
+        for (int i = 1; i < n; i++) {
+            local += f(a + i * h);
+        }
+        #pragma omp critical
+        res_crit += local;
+    }
+    res_crit *= h;
+
+    printf("Reduction: %f\nCritical: %f\n", res_red, res_crit);
+    return 0;
+}
+
+[23bcs102@mepcolinux ex9]$g++ -fopenmp pr1.c
+[23bcs102@mepcolinux ex9]$./a.out
+Enter lower limit (a): 2
+Enter upper limit (b): 3
+Enter number of sub-intervals (n): 5
+Reduction: 6.340000
+Critical: 6.340000
+[23bcs102@mepcolinux ex9]$./a.out
+Enter lower limit (a): 1
+Enter upper limit (b): 7
+Enter number of sub-intervals (n): 5
+Reduction: 115.440000
+Critical: 115.440000
+[23bcs102@mepcolinux ex9]$cat pr2.c
+#include <stdio.h>
+#include <omp.h>
+
+int main() {
+    int n, target, count = 0;
+
+    printf("Array size: ");
+    scanf("%d", &n);
+    int arr[n];
+
+    printf("Elements: ");
+    for (int i = 0; i < n; i++) scanf("%d", &arr[i]);
+
+    printf("Target: ");
+    scanf("%d", &target);
+
+    #pragma omp parallel for reduction(+:count)
+    for (int i = 0; i < n; i++) {
+        if (arr[i] > target) count++;
+    }
+
+    printf("Count: %d\n", count);
+    return 0;
+}
+
+[23bcs102@mepcolinux ex9]$g++ -fopenmp pr2.c
+[23bcs102@mepcolinux ex9]$./a.out
+Array size: 7
+Elements: 4 3 6 7 3 5 6
+Target: 3
+Count: 5
+[23bcs102@mepcolinux ex9]$./a.out
+Array size: 10
+Elements: 4 6 8 3 2 4 33 44 11 5
+Target: 10
+Count: 3
+[23bcs102@mepcolinux ex9]$cat pr3.c
+#include <stdio.h>
+#include <omp.h>
+
+int main() {
+    int n;
+
+    printf("Array size: ");
+    scanf("%d", &n);
+    int arr[n];
+
+    printf("Elements: ");
+    for (int i = 0; i < n; i++) scanf("%d", &arr[i]);
+
+    int max_val = arr[0];
+
+    #pragma omp parallel for reduction(max:max_val)
+    for (int i = 0; i < n; i++) {
+        if (arr[i] > max_val) max_val = arr[i];
+    }
+
+    printf("Max: %d\n", max_val);
+    return 0;
+}
+
+[23bcs102@mepcolinux ex9]$g++ -fopenmp pr3.c
+[23bcs102@mepcolinux ex9]$./a.out
+Array size: 10
+Elements: 45 2 77 34 12 90 33 22 11 90
+Max: 90
+[23bcs102@mepcolinux ex9]$./a.out
+Array size: 5
+Elements: 6 5 3 2 1
+Max: 6
+[23bcs102@mepcolinux ex9]$
+
+[23bcs102@mepcolinux ex9]$exit
+exit
+
+Script done on Tuesday 31 March 2026 11:53:59 AM IST
+[23bcs102@mepcolinux ex9]$
+
+
+
+
+
+
+
+
+
+
+
+
